@@ -54,6 +54,7 @@ button.link { border: none; background: none; color: var(--accent); padding: 4px
 .drive .dbar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 4px; overflow: hidden; }
 .drive .dbar > div { height: 100%; background: var(--accent); }
 .actions { display: flex; gap: 8px; }
+.lang { padding: 4px 10px; font-size: 12px; min-width: 52px; }
 .admin { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 
 .progress { padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }

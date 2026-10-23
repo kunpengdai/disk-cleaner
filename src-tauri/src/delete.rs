@@ -1,5 +1,6 @@
 //! 删除：先生成删除计划（按风险分级、拦截受保护项），执行时后端再次校验确认信息。
 
+use crate::i18n::tr;
 use crate::rules::{Mode, Rules};
 use crate::tree::*;
 use crate::winutil;
@@ -14,7 +15,9 @@ const ATTR_DIRECTORY: u32 = 0x10;
 const ATTR_REPARSE: u32 = 0x400;
 
 /// 多选删除时要输入的确认文字
-pub const MULTI_CONFIRM_TEXT: &str = "确认删除";
+pub fn multi_confirm_text() -> String {
+    tr("确认删除", "DELETE")
+}
 
 #[derive(Serialize, Clone)]
 pub struct PlanItem {
@@ -88,10 +91,10 @@ pub fn build_plan(tree: &Tree, rules: &Rules, ids: &[u32]) -> Plan {
                 Mode::Contents => n.children.iter().any(|&c| tree.nodes[c as usize].sub & S_STRICT != 0),
                 Mode::EmptyRecycleBin => false,
             };
-        let mut note = e.note.clone();
+        let mut note = e.note.get().to_string();
         if mode != Mode::EmptyRecycleBin && n.sub & S_INACCESSIBLE != 0 && level < 2 {
             level = 2;
-            note.push_str("（注意：里面有没有权限读取的子文件夹，内容未知，因此按“谨慎”处理。）");
+            note.push_str(&tr("（注意：里面有没有权限读取的子文件夹，内容未知，因此按“谨慎”处理。）", " (Note: some subfolders could not be read, so their contents are unknown. Treated as “Caution”.)"));
         }
         let mut item = PlanItem {
             id,
@@ -99,23 +102,23 @@ pub fn build_plan(tree: &Tree, rules: &Rules, ids: &[u32]) -> Plan {
             path: tree.path(id).display().to_string(),
             size: n.size,
             level,
-            rule_name: e.name.clone(),
+            rule_name: e.name.get().to_string(),
             note,
-            alt: e.alt.clone(),
+            alt: e.alt.as_ref().map(|a| a.get().to_string()),
             mode,
             blocked: None,
             strict,
         };
         if n.flags & F_VIRTUAL != 0 {
-            item.blocked = Some("这是扫描结果的汇总节点，不对应真实的文件夹。".into());
+            item.blocked = Some(tr("这是扫描结果的汇总节点，不对应真实的文件夹。", "This is a summary node of the scan results, not a real folder."));
         } else if n.flags & F_PARTIAL != 0 {
-            item.blocked = Some("快速扫描只统计了这个文件夹里的一部分内容，无法判断其余内容是否安全。请用全盘扫描后再操作，或展开后选择具体的项目。".into());
+            item.blocked = Some(tr("快速扫描只统计了这个文件夹里的一部分内容，无法判断其余内容是否安全。请用全盘扫描后再操作，或展开后选择具体的项目。", "Quick scan only counted part of this folder, so the rest cannot be judged safe. Run a full scan first, or expand it and pick specific items."));
         } else if level >= 3 {
             if n.level >= 3 {
-                item.blocked = Some(e.note.clone());
+                item.blocked = Some(e.note.get().to_string());
             } else {
                 let p = tree.first_protected_descendant(id).map(|d| tree.path(d).display().to_string()).unwrap_or_default();
-                item.blocked = Some(format!("里面包含受保护的项目：{p}。请展开后只选择可以删除的部分。"));
+                item.blocked = Some(if crate::i18n::is_en() { format!("Contains protected items: {p}. Expand it and pick only the parts that can be deleted.") } else { format!("里面包含受保护的项目：{p}。请展开后只选择可以删除的部分。") });
                 item.alt = None;
             }
         }
@@ -127,7 +130,7 @@ pub fn build_plan(tree: &Tree, rules: &Rules, ids: &[u32]) -> Plan {
     }
     let total = items.iter().map(|i| i.size).sum();
     let max_level = items.iter().map(|i| i.level).max().unwrap_or(0);
-    let expected_text = if items.len() == 1 { items[0].name.clone() } else { MULTI_CONFIRM_TEXT.to_string() };
+    let expected_text = if items.len() == 1 { items[0].name.clone() } else { multi_confirm_text() };
     let permanent_allowed = !items.is_empty() && max_level == 0;
     let typing_required = items.iter().any(|i| i.strict);
     Plan { items, blocked, total, max_level, expected_text, typing_required, permanent_allowed }
@@ -136,17 +139,17 @@ pub fn build_plan(tree: &Tree, rules: &Rules, ids: &[u32]) -> Plan {
 /// 后端校验：前端界面被绕过时也不能删除危险项
 pub fn check_request(plan: &Plan, req: &DeleteRequest) -> Result<(), String> {
     if plan.items.is_empty() {
-        return Err("没有可以删除的项目".into());
+        return Err(tr("没有可以删除的项目", "Nothing that can be deleted"));
     }
     if req.permanent && !plan.permanent_allowed {
-        return Err("只有全部是“安全”级别的项目时才能永久删除".into());
+        return Err(tr("只有全部是“安全”级别的项目时才能永久删除", "Permanent delete is only allowed when every item is “Safe”"));
     }
     if plan.max_level >= 2 {
         if !req.ack {
-            return Err("需要先勾选“我已了解”，已取消删除".into());
+            return Err(tr("需要先勾选“我已了解”，已取消删除", "“I understand” was not ticked. Delete cancelled"));
         }
         if plan.typing_required && req.typed.trim() != plan.expected_text {
-            return Err("输入的确认文字不正确，已取消删除".into());
+            return Err(tr("输入的确认文字不正确，已取消删除", "The confirmation text does not match. Delete cancelled"));
         }
     }
     Ok(())
@@ -195,7 +198,7 @@ fn remove_best_effort(p: &Path, errs: &mut Vec<String>) {
     let md = match std::fs::symlink_metadata(p) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) => return errs.push(format!("{}：{e}", p.display())),
+        Err(e) => return errs.push(format!("{}: {e}", p.display())),
     };
     let a = md.file_attributes();
     if a & ATTR_DIRECTORY != 0 {
@@ -208,7 +211,7 @@ fn remove_best_effort(p: &Path, errs: &mut Vec<String>) {
             }
         }
         if let Err(e) = std::fs::remove_dir(p) {
-            errs.push(format!("{}：{e}", p.display()));
+            errs.push(format!("{}: {e}", p.display()));
         }
     } else {
         if a & ATTR_READONLY != 0 {
@@ -218,7 +221,7 @@ fn remove_best_effort(p: &Path, errs: &mut Vec<String>) {
             let _ = std::fs::set_permissions(p, perm);
         }
         if let Err(e) = std::fs::remove_file(p) {
-            errs.push(format!("{}：{e}", p.display()));
+            errs.push(format!("{}: {e}", p.display()));
         }
     }
 }
@@ -229,7 +232,7 @@ pub fn run_jobs(jobs: &[Job], permanent: bool, owner: Option<isize>) -> Vec<Opti
         .map(|job| {
             let path = PathBuf::from(&job.item.path);
             if has_reparse_ancestor(&path) {
-                return Some("路径中包含链接，为安全起见已跳过".into());
+                return Some(tr("路径中包含链接，为安全起见已跳过", "The path goes through a link, skipped for safety"));
             }
             match job.item.mode {
                 Mode::EmptyRecycleBin => {
@@ -248,11 +251,11 @@ pub fn run_jobs(jobs: &[Job], permanent: bool, owner: Option<isize>) -> Vec<Opti
                         for t in &targets {
                             remove_best_effort(t, &mut errs);
                         }
-                        (!errs.is_empty()).then(|| format!("有 {} 个文件或文件夹未能删除（可能正在使用或没有权限），例如：{}", errs.len(), errs[0]))
+                        (!errs.is_empty()).then(|| if crate::i18n::is_en() { format!("{} files or folders could not be deleted (in use or no permission), e.g. {}", errs.len(), errs[0]) } else { format!("有 {} 个文件或文件夹未能删除（可能正在使用或没有权限），例如：{}", errs.len(), errs[0]) })
                     } else {
                         match winutil::recycle(&targets, owner) {
                             Ok(false) => None,
-                            Ok(true) => Some("部分项目未能移到回收站（可能正在使用、没有权限，或在提示中选择了取消）".into()),
+                            Ok(true) => Some(tr("部分项目未能移到回收站（可能正在使用、没有权限，或在提示中选择了取消）", "Some items could not be moved to the Recycle Bin (in use, no permission, or cancelled in the prompt)")),
                             Err(e) => Some(e),
                         }
                     }
@@ -279,7 +282,7 @@ pub fn apply_results(tree: &mut Tree, jobs: &[Job], errs: Vec<Option<String>>) -
         if let Some(reason) = err {
             out.failed.push(Failure { path: job.item.path.clone(), reason });
         } else if any_left && job.item.mode == Mode::Whole {
-            out.failed.push(Failure { path: job.item.path.clone(), reason: "未能完全删除，部分文件可能正在使用".into() });
+            out.failed.push(Failure { path: job.item.path.clone(), reason: tr("未能完全删除，部分文件可能正在使用", "Not fully deleted; some files may be in use") });
         }
     }
     out

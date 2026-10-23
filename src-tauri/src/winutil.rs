@@ -1,5 +1,6 @@
 //! Windows 系统接口：磁盘列表、管理员权限、回收站。
 
+use crate::i18n::tr;
 use serde::Serialize;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
@@ -25,7 +26,7 @@ pub struct DriveInfo {
     pub root: String,
     pub label: String,
     pub fs: String,
-    pub kind: &'static str,
+    pub kind: String,
     pub total: u64,
     pub free: u64,
 }
@@ -40,9 +41,9 @@ pub fn list_drives() -> Vec<DriveInfo> {
         let root = format!("{}:\\", (b'A' + i as u8) as char);
         let w = wide(&root);
         let kind = match unsafe { GetDriveTypeW(PCWSTR(w.as_ptr())) } {
-            2 => "可移动磁盘",
-            3 => "本地磁盘",
-            4 => "网络驱动器",
+            2 => tr("可移动磁盘", "Removable drive"),
+            3 => tr("本地磁盘", "Local disk"),
+            4 => tr("网络驱动器", "Network drive"),
             _ => continue, // 光驱、虚拟盘等
         };
         let (mut free, mut total) = (0u64, 0u64);
@@ -87,7 +88,7 @@ pub fn relaunch_as_admin() -> Result<(), String> {
     if r.0 as isize > 32 {
         Ok(())
     } else {
-        Err("没有获得管理员权限（可能在系统提示中点了“否”）".into())
+        Err(tr("没有获得管理员权限（可能在系统提示中点了“否”）", "Administrator rights were not granted (you may have clicked “No”)"))
     }
 }
 
@@ -98,7 +99,7 @@ pub fn empty_recycle_bin(drive_root: &str) -> Result<(), String> {
     let w = wide(drive_root);
     unsafe {
         SHEmptyRecycleBinW(None, PCWSTR(w.as_ptr()), SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND)
-            .map_err(|e| format!("清空回收站失败：{e}"))
+            .map_err(|e| format!("{}: {e}", tr("清空回收站失败", "Failed to empty the Recycle Bin")))
     }
 }
 
@@ -130,7 +131,7 @@ pub fn recycle(paths: &[PathBuf], owner: Option<isize>) -> Result<bool, String> 
         if init.is_ok() {
             CoUninitialize();
         }
-        result.map_err(|e| format!("移到回收站失败：{e}"))
+        result.map_err(|e| format!("{}: {e}", tr("移到回收站失败", "Failed to move to the Recycle Bin")))
     }
 }
 

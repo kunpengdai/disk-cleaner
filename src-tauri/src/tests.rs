@@ -183,7 +183,7 @@ fn plan_blocks_and_confirms() {
     // 混选：按最高等级，输入“确认删除”
     let p = build_plan(&t, &r, &ids(&[&app, &temp]));
     assert_eq!(p.max_level, 2);
-    assert_eq!(p.expected_text, MULTI_CONFIRM_TEXT);
+    assert_eq!(p.expected_text, multi_confirm_text());
 
     // 只是未识别的文件夹：仍是谨慎、只进回收站、要勾选已了解，但不用输入名称
     let p = build_plan(&t, &r, &ids(&["C:\\Games"]));
@@ -257,7 +257,7 @@ fn real_machine() {
         hits.sort_by(|a, b| t.nodes[*b as usize].size.cmp(&t.nodes[*a as usize].size));
         for h in hits.iter().take(12) {
             let n = &t.nodes[*h as usize];
-            println!("  L{} {:>9.1} MB  {:<16} {}", n.level, n.size as f64 / 1e6, r.entry(n.rule).name, t.path(*h).display());
+            println!("  L{} {:>9.1} MB  {:<16} {}", n.level, n.size as f64 / 1e6, r.entry(n.rule).name.get(), t.path(*h).display());
         }
         if mode == "full" {
             let r0 = t.root;

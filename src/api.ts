@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getLang, t, type Key } from "./i18n";
 
 export interface NodeView {
   id: number; name: string; dir: boolean; size: number; files: number; mtime: number;
@@ -24,6 +25,7 @@ export interface Outcome { freed: number; removed: number; failed: { path: strin
 export const F = { DIR: 1, INACCESSIBLE: 2, REPARSE: 4, CLOUD: 8, DELETED: 16, PARTIAL: 32, VIRTUAL: 64, INHERITED: 128 };
 
 export const api = {
+  setLang: (lang: string) => invoke<void>("set_lang", { lang }),
   drives: () => invoke<Drive[]>("list_drives"),
   isElevated: () => invoke<boolean>("is_elevated"),
   relaunchAsAdmin: () => invoke<void>("relaunch_as_admin"),
@@ -41,7 +43,9 @@ export const api = {
   openLogDir: () => invoke<void>("open_log_dir"),
 };
 
-export const LEVEL_NAMES = ["安全", "需确认", "谨慎", "受保护"];
+export function levelName(level: number): string {
+  return t(`L${Math.min(3, Math.max(0, level))}` as Key);
+}
 
 export function fmtSize(b: number): string {
   if (b < 1024) return `${b} B`;
@@ -52,7 +56,12 @@ export function fmtSize(b: number): string {
 }
 
 export function fmtCount(n: number): string {
-  return n >= 10000 ? `${(n / 10000).toFixed(n >= 100000 ? 0 : 1)} 万` : String(n);
+  if (getLang() === "zh") {
+    return n >= 10000 ? t("countWan", { n: (n / 10000).toFixed(n >= 100000 ? 0 : 1) }) : String(n);
+  }
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 10_000) return `${(n / 1000).toFixed(0)}k`;
+  return String(n);
 }
 
 export function fmtDate(ms: number): string {
@@ -67,6 +76,6 @@ export function esc(s: string): string {
 
 export function badge(level: number, maxLevel = level): string {
   const mixed = maxLevel > level;
-  const title = mixed ? `本身：${LEVEL_NAMES[level]}；里面包含：${LEVEL_NAMES[maxLevel]}` : LEVEL_NAMES[maxLevel];
-  return `<span class="badge l${maxLevel}${mixed ? " mixed" : ""}" title="${title}">${LEVEL_NAMES[maxLevel]}</span>`;
+  const title = mixed ? t("levelMixed", { self: levelName(level), max: levelName(maxLevel) }) : levelName(maxLevel);
+  return `<span class="badge l${maxLevel}${mixed ? " mixed" : ""}" title="${esc(title)}">${esc(levelName(maxLevel))}</span>`;
 }

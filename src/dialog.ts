@@ -1,4 +1,5 @@
-import { api, badge, esc, fmtSize, LEVEL_NAMES, type Outcome, type Plan, type PlanItem } from "./api";
+import { api, badge, esc, fmtSize, levelName, type Outcome, type Plan, type PlanItem } from "./api";
+import { t } from "./i18n";
 
 const modal = document.getElementById("modal")!;
 const dialog = document.getElementById("dialog")!;
@@ -10,14 +11,14 @@ function close() {
 }
 
 function modeText(it: PlanItem): string {
-  if (it.mode === "contents") return "（只清空里面的内容，保留文件夹）";
-  if (it.mode === "empty_recycle_bin") return "（清空回收站）";
+  if (it.mode === "contents") return t("dlgModeContents");
+  if (it.mode === "empty_recycle_bin") return t("dlgModeRecycle");
   return "";
 }
 
 function itemHtml(it: PlanItem, checkable: boolean): string {
   return `<div class="pitem${it.blocked ? " blocked" : ""}">
-    ${checkable ? `<input type="checkbox" checked data-id="${it.id}" title="取消勾选则不删除这一项" />` : "<span></span>"}
+    ${checkable ? `<input type="checkbox" checked data-id="${it.id}" title="${esc(t("dlgUncheckTip"))}" />` : "<span></span>"}
     <div class="pn" title="${esc(it.name)}">${esc(it.name)} <span class="muted">${modeText(it)}</span></div>
     <div>${fmtSize(it.size)}</div>
     <div>${badge(it.level)}</div>
@@ -59,53 +60,59 @@ export async function openDeleteFlow(initialIds: number[], onDone: (o: Outcome) 
     const multi = L >= 2;
     const steps = plan.typing_required ? 3 : 2;
     const allowed = plan.items;
-    const title = allowed.length === 0 ? "这些项目不能删除"
-      : L >= 2 ? "⚠ 删除谨慎项目" : L === 1 ? "确认删除" : "清理";
-    const sub = allowed.length === 0 ? "所选项目都受保护，或者需要先完成全盘扫描。"
-      : `共 ${allowed.length} 项，${fmtSize(plan.total)}。最高风险：${LEVEL_NAMES[L]}。`
-        + (L >= 2 ? "这些文件删除后可能导致软件出问题或丢失数据。" : "");
+    const title = allowed.length === 0 ? t("dlgCannotTitle")
+      : L >= 2 ? t("dlgCautionTitle") : L === 1 ? t("dlgConfirmTitle") : t("dlgCleanTitle");
+    const sub = allowed.length === 0 ? t("dlgCannotSub")
+      : t("dlgSub", { n: allowed.length, size: fmtSize(plan.total), level: levelName(L) })
+        + (L >= 2 ? " " + t("dlgSubCaution") : "");
+    const recycleBtn = running ? t("dlgDeleting") : t("dlgMoveToRecycle");
+    // 只是清空回收站时，不能说“可以从回收站还原”
+    const onlyEmptyBin = allowed.length > 0 && allowed.every((it) => it.mode === "empty_recycle_bin");
 
     let body = "";
     if (!multi || step === 1) {
       body += allowed.map((it) => itemHtml(it, allowed.length > 1 || plan.blocked.length > 0)).join("");
       if (plan.blocked.length) {
-        body += `<div class="section-title">以下 ${plan.blocked.length} 项不会被删除</div>`;
+        body += `<div class="section-title">${esc(t("dlgNotDeleted", { n: plan.blocked.length }))}</div>`;
         body += plan.blocked.map((it) => itemHtml(it, false)).join("");
       }
       if (!multi && allowed.length) {
         body += `<div style="margin:12px 0">${plan.permanent_allowed
-          ? `<label class="opt"><input type="checkbox" id="perm" ${permanent ? "checked" : ""}/> 直接永久删除（缓存类文件放回收站没有意义）</label>`
-          : `<span class="muted">将移到回收站，需要时可以从回收站还原。</span>`}</div>`;
+          ? `<label class="opt"><input type="checkbox" id="perm" ${permanent ? "checked" : ""}/> ${esc(t("dlgPermanent"))}</label>`
+          : `<span class="muted">${esc(t(onlyEmptyBin ? "dlgEmptyRecycleNote" : "dlgToRecycle"))}</span>`}</div>`;
       }
     } else if (step === 2) {
-      body += `<p>你将要删除：</p><ul>${allowed.map((it) => `<li><b>${esc(it.name)}</b> <span class="muted">${fmtSize(it.size)} · ${esc(it.rule_name)}</span></li>`).join("")}</ul>
+      body += `<p>${esc(t("dlgAboutTo"))}</p><ul>${allowed.map((it) => `<li><b>${esc(it.name)}</b> <span class="muted">${fmtSize(it.size)} · ${esc(it.rule_name)}</span></li>`).join("")}</ul>
         <label class="ack"><input type="checkbox" id="ack" ${ack ? "checked" : ""}/>
-        <span>我已了解：这些文件删除后，相关软件可能无法正常运行，个人数据可能丢失。文件会移到回收站，回收站清空后将无法恢复。</span></label>
-        ${steps === 2 ? `<p class="muted">如果 Windows 提示“文件太大无法放入回收站”，请在提示中选择“否”取消，以免永久删除。</p>` : ""}`;
+        <span>${esc(t("dlgAck"))}</span></label>
+        ${steps === 2 ? `<p class="muted">${esc(t("dlgNukeWarn"))}</p>` : ""}`;
     } else {
-      body += `<p>请输入 <span class="expect">${esc(plan.expected_text)}</span> 以确认删除：</p>
+      body += `<p>${t("dlgTypePrompt", { text: `<span class="expect">${esc(plan.expected_text)}</span>` })}</p>
         <input class="typed" id="typed" autocomplete="off" spellcheck="false" value="${esc(typed)}" />
-        <p class="muted">文件会移到回收站。如果 Windows 提示“文件太大无法放入回收站”，请在提示中选择“否”取消，以免永久删除。</p>`;
+        <p class="muted">${esc(t("dlgTypeNote"))}</p>`;
     }
 
     const canGo = allowed.length > 0 && !running;
-    let foot = `<div class="grow">${allowed.length ? fmtSize(plan.total) : ""}</div><button id="cancel">取消</button>`;
+    let foot = `<div class="grow">${allowed.length ? fmtSize(plan.total) : ""}</div><button id="cancel">${esc(t("cancel"))}</button>`;
     if (!allowed.length) {
-      foot = `<div class="grow"></div><button id="cancel">关闭</button>`;
+      foot = `<div class="grow"></div><button id="cancel">${esc(t("close"))}</button>`;
     } else if (!multi) {
-      foot += `<button id="go" class="${L === 0 ? "primary" : "danger"}" ${canGo ? "" : "disabled"}>${running ? "正在删除…" : permanent ? "永久删除" : "移到回收站"}</button>`;
+      const label = running ? t("dlgDeleting") : permanent ? t("dlgDeletePermanent")
+        : onlyEmptyBin ? t("dlgEmptyRecycle") : t("dlgMoveToRecycle");
+      foot += `<button id="go" class="${L === 0 ? "primary" : "danger"}" ${canGo ? "" : "disabled"}>${esc(label)}</button>`;
     } else if (step === 1) {
-      foot += `<button id="next" class="primary">我已看完，下一步</button>`;
+      foot += `<button id="next" class="primary">${esc(t("dlgNextAfterRead"))}</button>`;
     } else if (step === 2 && steps === 3) {
-      foot += `<button id="back">上一步</button><button id="next" class="primary" ${ack ? "" : "disabled"}>下一步</button>`;
+      foot += `<button id="back">${esc(t("dlgBack"))}</button><button id="next" class="primary" ${ack ? "" : "disabled"}>${esc(t("dlgNext"))}</button>`;
     } else if (step === 2) {
-      foot += `<button id="back">上一步</button><button id="go" class="danger" ${ack && canGo ? "" : "disabled"}>${running ? "正在删除…" : "移到回收站"}</button>`;
+      foot += `<button id="back">${esc(t("dlgBack"))}</button><button id="go" class="danger" ${ack && canGo ? "" : "disabled"}>${esc(recycleBtn)}</button>`;
     } else {
       const ok = typed.trim() === plan.expected_text && remain <= 0;
-      foot += `<button id="back">上一步</button><button id="go" class="danger" ${ok && canGo ? "" : "disabled"}>${running ? "正在删除…" : remain > 0 ? `请等待 ${remain} 秒` : "移到回收站"}</button>`;
+      const label = running ? t("dlgDeleting") : remain > 0 ? t("dlgWait", { n: remain }) : t("dlgMoveToRecycle");
+      foot += `<button id="back">${esc(t("dlgBack"))}</button><button id="go" class="danger" ${ok && canGo ? "" : "disabled"}>${esc(label)}</button>`;
     }
 
-    dialog.innerHTML = `<h3>${title}</h3><div class="sub">${sub}</div>
+    dialog.innerHTML = `<h3>${esc(title)}</h3><div class="sub">${esc(sub)}</div>
       ${multi && allowed.length ? `<div class="steps">${Array.from({ length: steps }, (_, k) => k + 1).map((s) => `<span class="${s <= step ? "on" : ""}"></span>`).join("")}</div>` : ""}
       <div class="body">${body}</div><div class="foot">${foot}</div>`;
     modal.classList.remove("hidden");
@@ -162,13 +169,13 @@ export async function openDeleteFlow(initialIds: number[], onDone: (o: Outcome) 
 }
 
 function showResult(o: Outcome) {
-  dialog.innerHTML = `<h3>${o.failed.length ? "部分完成" : "已完成"}</h3>
+  dialog.innerHTML = `<h3>${esc(o.failed.length ? t("resPartial") : t("resDone"))}</h3>
     <div class="body">
-      <div class="result-big">释放了 ${fmtSize(o.freed)}</div>
-      <p class="muted">删除了 ${o.removed} 项。重新扫描可以得到最准确的大小。</p>
-      ${o.failed.length ? `<div class="section-title">${o.failed.length} 项未能完全删除</div>` + o.failed.map((f) =>
+      <div class="result-big">${esc(t("resFreed", { size: fmtSize(o.freed) }))}</div>
+      <p class="muted">${esc(t("resRemoved", { n: o.removed }))}</p>
+      ${o.failed.length ? `<div class="section-title">${esc(t("resFailed", { n: o.failed.length }))}</div>` + o.failed.map((f) =>
         `<div class="pitem"><span></span><div class="pn">${esc(f.path)}</div><div></div><div></div><div class="pnote">${esc(f.reason)}</div></div>`).join("") : ""}
     </div>
-    <div class="foot"><div class="grow"></div><button id="ok" class="primary">好的</button></div>`;
+    <div class="foot"><div class="grow"></div><button id="ok" class="primary">${esc(t("ok"))}</button></div>`;
   dialog.querySelector("#ok")!.addEventListener("click", close);
 }

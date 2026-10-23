@@ -1,4 +1,5 @@
 mod delete;
+mod i18n;
 mod rules;
 mod scanner;
 mod tree;
@@ -11,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager, State};
+use i18n::tr;
 use tree::*;
 
 struct AppState {
@@ -78,6 +80,17 @@ struct TreeInfo {
 
 type R<T> = Result<T, String>;
 
+fn no_result() -> String {
+    tr("还没有扫描结果", "No scan results yet")
+}
+
+/// 切换界面语言（"zh" / "en"），影响之后返回的所有文字
+#[tauri::command]
+async fn set_lang(lang: String) -> R<()> {
+    i18n::set(&lang);
+    Ok(())
+}
+
 #[tauri::command]
 async fn list_drives() -> R<Vec<winutil::DriveInfo>> {
     Ok(winutil::list_drives())
@@ -98,7 +111,7 @@ async fn relaunch_as_admin(app: tauri::AppHandle) -> R<()> {
 #[tauri::command]
 async fn start_scan(app: tauri::AppHandle, state: State<'_, AppState>, mode: String, root: Option<String>) -> R<()> {
     if state.busy.swap(true, Relaxed) {
-        return Err("正在扫描或删除，请稍候".into());
+        return Err(tr("正在扫描或删除，请稍候", "A scan or delete is in progress, please wait"));
     }
     // 扫描期间不保留旧结果，避免拿过期的数据去删除
     *state.tree.write() = None;
@@ -131,7 +144,7 @@ async fn start_scan(app: tauri::AppHandle, state: State<'_, AppState>, mode: Str
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let root = PathBuf::from(root.unwrap_or_else(|| "C:\\".into()));
             if !root.is_dir() {
-                return Err(format!("找不到 {}", root.display()));
+                return Err(format!("{} {}", tr("找不到", "Not found:"), root.display()));
             }
             if mode == "quick" {
                 Ok(scanner::scan_quick(&rules, &root.to_string_lossy(), &ctx))
@@ -152,7 +165,7 @@ async fn start_scan(app: tauri::AppHandle, state: State<'_, AppState>, mode: Str
             }
             Ok(Ok(_)) => {}
             Ok(Err(e)) => ev.error = Some(e),
-            Err(_) => ev.error = Some("扫描时发生内部错误".into()),
+            Err(_) => ev.error = Some(tr("扫描时发生内部错误", "Internal error during scan")),
         }
         busy.store(false, Relaxed);
         let _ = app.emit("scan-finished", ev);
@@ -177,8 +190,8 @@ async fn get_tree_info(state: State<'_, AppState>) -> R<Option<TreeInfo>> {
 #[tauri::command]
 async fn get_children(state: State<'_, AppState>, id: u32, sort: String, offset: usize, limit: usize) -> R<ChildrenPage> {
     let g = state.tree.read();
-    let t = g.as_ref().ok_or("还没有扫描结果")?;
-    let n = t.nodes.get(id as usize).ok_or("节点不存在")?;
+    let t = g.as_ref().ok_or_else(no_result)?;
+    let n = t.nodes.get(id as usize).ok_or_else(|| tr("节点不存在", "Item not found"))?;
     let mut ids = n.children.clone();
     match sort.as_str() {
         "name" => ids.sort_by_cached_key(|&c| t.nodes[c as usize].name.to_lowercase()),
@@ -194,8 +207,8 @@ async fn get_children(state: State<'_, AppState>, id: u32, sort: String, offset:
 #[tauri::command]
 async fn get_detail(state: State<'_, AppState>, id: u32) -> R<NodeDetail> {
     let g = state.tree.read();
-    let t = g.as_ref().ok_or("还没有扫描结果")?;
-    let n = t.nodes.get(id as usize).ok_or("节点不存在")?;
+    let t = g.as_ref().ok_or_else(no_result)?;
+    let n = t.nodes.get(id as usize).ok_or_else(|| tr("节点不存在", "Item not found"))?;
     let e = state.rules.entry(n.rule);
     let inherited = n.flags & F_INHERITED != 0;
     let protected_inside = if n.level < 3 && n.max_level >= 3 {
@@ -207,12 +220,12 @@ async fn get_detail(state: State<'_, AppState>, id: u32) -> R<NodeDetail> {
         node: t.view(&state.rules, id),
         path: t.path(id).display().to_string(),
         rule_id: e.id.clone(),
-        rule_name: e.name.clone(),
-        category: e.category.clone(),
+        rule_name: e.name.get().to_string(),
+        category: e.category.get().to_string(),
         origin: e.origin,
         inherited,
-        note: e.note.clone(),
-        alt: e.alt.clone(),
+        note: e.note.get().to_string(),
+        alt: e.alt.as_ref().map(|a| a.get().to_string()),
         mode: if inherited || !n.is_dir() { rules::Mode::Whole } else { e.mode },
         protected_inside,
     })
@@ -228,7 +241,7 @@ async fn get_hits(state: State<'_, AppState>) -> R<Vec<Hit>> {
         .filter(|&&h| t.nodes[h as usize].flags & F_DELETED == 0 && t.nodes[h as usize].size > 0)
         .map(|&h| {
             let e = state.rules.entry(t.nodes[h as usize].rule);
-            Hit { node: t.view(&state.rules, h), path: t.path(h).display().to_string(), category: e.category.clone(), note: e.note.clone() }
+            Hit { node: t.view(&state.rules, h), path: t.path(h).display().to_string(), category: e.category.get().to_string(), note: e.note.get().to_string() }
         })
         .collect();
     hits.sort_by(|a, b| b.node.size.cmp(&a.node.size));
@@ -238,19 +251,19 @@ async fn get_hits(state: State<'_, AppState>) -> R<Vec<Hit>> {
 #[tauri::command]
 async fn plan_delete(state: State<'_, AppState>, ids: Vec<u32>) -> R<delete::Plan> {
     let g = state.tree.read();
-    let t = g.as_ref().ok_or("还没有扫描结果")?;
+    let t = g.as_ref().ok_or_else(no_result)?;
     Ok(delete::build_plan(t, &state.rules, &ids))
 }
 
 #[tauri::command]
 async fn execute_delete(window: tauri::WebviewWindow, state: State<'_, AppState>, req: delete::DeleteRequest) -> R<delete::Outcome> {
     if state.busy.swap(true, Relaxed) {
-        return Err("正在扫描或删除，请稍候".into());
+        return Err(tr("正在扫描或删除，请稍候", "A scan or delete is in progress, please wait"));
     }
     let result = (|| {
         let (plan, jobs) = {
             let g = state.tree.read();
-            let t = g.as_ref().ok_or("还没有扫描结果")?;
+            let t = g.as_ref().ok_or_else(no_result)?;
             let plan = delete::build_plan(t, &state.rules, &req.ids);
             delete::check_request(&plan, &req)?;
             let jobs = delete::jobs_from_plan(t, &plan);
@@ -291,7 +304,7 @@ async fn execute_delete(window: tauri::WebviewWindow, state: State<'_, AppState>
 #[tauri::command]
 async fn open_in_explorer(state: State<'_, AppState>, id: u32) -> R<()> {
     let g = state.tree.read();
-    let t = g.as_ref().ok_or("还没有扫描结果")?;
+    let t = g.as_ref().ok_or_else(no_result)?;
     winutil::open_in_explorer(&t.path(id));
     Ok(())
 }
@@ -317,6 +330,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            set_lang,
             list_drives,
             is_elevated,
             relaunch_as_admin,

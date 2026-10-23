@@ -1,7 +1,9 @@
 //! 规则库：内置保护名单（代码里写死）+ 启发式条目 + builtin.json 里的清理规则。
 //! 所有条目放在同一张表里，树节点只记录条目编号。
 
+use crate::i18n::Text;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -24,26 +26,22 @@ pub enum Origin {
     Heuristic,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct Entry {
     pub id: String,
-    pub name: String,
-    pub category: String,
+    pub name: Text,
+    pub category: Text,
     pub level: u8,
     pub mode: Mode,
-    pub note: String,
-    pub alt: Option<String>,
+    pub note: Text,
+    pub alt: Option<Text>,
     pub origin: Origin,
     /// 受保护条目：子项是否继承同样的保护
-    #[serde(skip)]
     pub inherit: bool,
     /// 是否参与快速扫描
-    #[serde(skip)]
     pub quick: bool,
     /// 在这个条目管辖的范围内，是否允许 `**\xxx` 这类全局规则生效
-    #[serde(skip)]
     pub allow_global: bool,
-    #[serde(skip)]
     pub dir_only: bool,
 }
 
@@ -99,51 +97,88 @@ struct JsonRule {
     dir_only: bool,
 }
 
+#[derive(Deserialize)]
+struct JsonEn {
+    categories: HashMap<String, String>,
+    rules: HashMap<String, JsonEnRule>,
+}
+
+#[derive(Deserialize)]
+struct JsonEnRule {
+    name: String,
+    note: String,
+    alt: Option<String>,
+}
+
+/// (中文, English)
+type Bi = (&'static str, &'static str);
+
 /// 内置保护名单：(编号, 名称, 路径, 子项是否继承, 说明, 替代做法)
-const PROTECTED: &[(&str, &str, &[&str], bool, &str, Option<&str>)] = &[
-    ("winsxs", "Windows 组件存储", &["%SystemRoot%\\WinSxS"], true,
-     "Windows 组件存储，里面大量文件是系统文件的硬链接，实际占用比显示的小。直接删除会导致系统无法更新甚至无法启动。",
-     Some("以管理员身份打开命令行，运行：DISM /Online /Cleanup-Image /StartComponentCleanup")),
-    ("system32", "系统核心文件", &["%SystemRoot%\\System32", "%SystemRoot%\\SysWOW64"], true,
-     "Windows 核心系统文件，删除会导致系统损坏。", None),
-    ("windows", "Windows 系统目录", &["%SystemRoot%"], true,
-     "Windows 系统目录。除了已识别的缓存和临时文件，这里的内容都不能直接删除。",
-     Some("可以使用系统自带的“磁盘清理”或 设置 → 系统 → 存储 → 临时文件。")),
-    ("pagefile", "虚拟内存文件", &["*:\\pagefile.sys", "*:\\swapfile.sys"], true,
-     "系统的虚拟内存文件，正在使用中，无法也不应直接删除。",
-     Some("可在 设置 → 系统 → 关于 → 高级系统设置 → 性能 → 高级 → 虚拟内存 中调整大小。")),
-    ("hiberfil", "休眠文件", &["*:\\hiberfil.sys"], true,
-     "系统休眠和快速启动使用的文件，无法直接删除。",
-     Some("如果不需要休眠功能，以管理员身份运行：powercfg /h off，文件会自动消失。")),
-    ("sysvol", "系统还原点", &["*:\\System Volume Information"], true,
-     "系统还原点和卷影副本，由系统管理。",
-     Some("在 控制面板 → 系统 → 系统保护 → 配置 中可以删除还原点或限制占用空间。")),
-    ("recycle-inner", "回收站内部", &["*:\\$Recycle.Bin\\*"], true,
-     "回收站的内部结构。",
-     Some("请选中上一级的 $Recycle.Bin 来清空回收站。")),
-    ("boot", "系统启动文件", &["*:\\Boot", "*:\\bootmgr", "*:\\BOOTNXT", "*:\\Recovery", "*:\\$WinREAgent", "*:\\$SysReset", "*:\\$Windows.~BT", "*:\\$Windows.~WS", "*:\\$GetCurrent", "*:\\DumpStack.log*", "*:\\Config.Msi", "*:\\Documents and Settings"], true,
-     "系统启动、恢复或升级相关的文件，删除可能导致系统无法启动或无法恢复。",
-     Some("升级残留可以用系统自带的“磁盘清理”删除。")),
-    ("windowsapps", "应用商店应用", &["*:\\Program Files\\WindowsApps", "*:\\WindowsApps", "*:\\WpSystem"], true,
-     "Microsoft Store 安装的应用，受系统保护。",
-     Some("在 设置 → 应用 → 已安装的应用 中卸载。")),
-    ("ntuser", "用户注册表", &["%USERPROFILE%\\NTUSER*", "%USERPROFILE%\\ntuser*"], true,
-     "当前用户的注册表文件，删除会导致账户无法登录。", None),
-    ("profile-root", "用户文件夹", &["%SystemDrive%\\Users", "%SystemDrive%\\Users\\*"], false,
-     "用户配置文件的根目录。整体删除会导致账户损坏，请只清理其中具体的子文件夹。", None),
+const PROTECTED: &[(&str, Bi, &[&str], bool, Bi, Option<Bi>)] = &[
+    ("winsxs", ("Windows 组件存储", "Windows component store"), &["%SystemRoot%\\WinSxS"], true,
+     ("Windows 组件存储，里面大量文件是系统文件的硬链接，实际占用比显示的小。直接删除会导致系统无法更新甚至无法启动。",
+      "The Windows component store. Many files here are hard links to system files, so the real usage is smaller than shown. Deleting it breaks Windows Update and can stop Windows from starting."),
+     Some(("以管理员身份打开命令行，运行：DISM /Online /Cleanup-Image /StartComponentCleanup",
+           "Open a command prompt as administrator and run: DISM /Online /Cleanup-Image /StartComponentCleanup"))),
+    ("system32", ("系统核心文件", "Core system files"), &["%SystemRoot%\\System32", "%SystemRoot%\\SysWOW64"], true,
+     ("Windows 核心系统文件，删除会导致系统损坏。", "Core Windows system files. Deleting them breaks Windows."), None),
+    ("windows", ("Windows 系统目录", "Windows folder"), &["%SystemRoot%"], true,
+     ("Windows 系统目录。除了已识别的缓存和临时文件，这里的内容都不能直接删除。",
+      "The Windows system folder. Apart from recognized caches and temp files, nothing here can be deleted directly."),
+     Some(("可以使用系统自带的“磁盘清理”或 设置 → 系统 → 存储 → 临时文件。",
+           "Use the built-in Disk Cleanup, or Settings → System → Storage → Temporary files."))),
+    ("pagefile", ("虚拟内存文件", "Page file"), &["*:\\pagefile.sys", "*:\\swapfile.sys"], true,
+     ("系统的虚拟内存文件，正在使用中，无法也不应直接删除。",
+      "The system's virtual memory file. It is in use and cannot, and should not, be deleted directly."),
+     Some(("可在 设置 → 系统 → 关于 → 高级系统设置 → 性能 → 高级 → 虚拟内存 中调整大小。",
+           "Change its size in Settings → System → About → Advanced system settings → Performance → Advanced → Virtual memory."))),
+    ("hiberfil", ("休眠文件", "Hibernation file"), &["*:\\hiberfil.sys"], true,
+     ("系统休眠和快速启动使用的文件，无法直接删除。",
+      "Used by hibernation and Fast Startup. It cannot be deleted directly."),
+     Some(("如果不需要休眠功能，以管理员身份运行：powercfg /h off，文件会自动消失。",
+           "If you don't need hibernation, run powercfg /h off as administrator and the file goes away."))),
+    ("sysvol", ("系统还原点", "System restore points"), &["*:\\System Volume Information"], true,
+     ("系统还原点和卷影副本，由系统管理。", "Restore points and shadow copies, managed by Windows."),
+     Some(("在 控制面板 → 系统 → 系统保护 → 配置 中可以删除还原点或限制占用空间。",
+           "Delete restore points or limit their space in Control Panel → System → System Protection → Configure."))),
+    ("recycle-inner", ("回收站内部", "Recycle Bin internals"), &["*:\\$Recycle.Bin\\*"], true,
+     ("回收站的内部结构。", "Internal structure of the Recycle Bin."),
+     Some(("请选中上一级的 $Recycle.Bin 来清空回收站。", "Select the parent $Recycle.Bin to empty the Recycle Bin."))),
+    ("boot", ("系统启动文件", "Boot and recovery files"), &["*:\\Boot", "*:\\bootmgr", "*:\\BOOTNXT", "*:\\Recovery", "*:\\$WinREAgent", "*:\\$SysReset", "*:\\$Windows.~BT", "*:\\$Windows.~WS", "*:\\$GetCurrent", "*:\\DumpStack.log*", "*:\\Config.Msi", "*:\\Documents and Settings"], true,
+     ("系统启动、恢复或升级相关的文件，删除可能导致系统无法启动或无法恢复。",
+      "Files used to start, recover or upgrade Windows. Deleting them can stop Windows from starting or recovering."),
+     Some(("升级残留可以用系统自带的“磁盘清理”删除。", "Leftovers from upgrades can be removed with the built-in Disk Cleanup."))),
+    ("windowsapps", ("应用商店应用", "Microsoft Store apps"), &["*:\\Program Files\\WindowsApps", "*:\\WindowsApps", "*:\\WpSystem"], true,
+     ("Microsoft Store 安装的应用，受系统保护。", "Apps installed from the Microsoft Store, protected by Windows."),
+     Some(("在 设置 → 应用 → 已安装的应用 中卸载。", "Uninstall them in Settings → Apps → Installed apps."))),
+    ("ntuser", ("用户注册表", "User registry"), &["%USERPROFILE%\\NTUSER*", "%USERPROFILE%\\ntuser*"], true,
+     ("当前用户的注册表文件，删除会导致账户无法登录。", "The current user's registry files. Deleting them stops the account from signing in."), None),
+    ("profile-root", ("用户文件夹", "User profile folder"), &["%SystemDrive%\\Users", "%SystemDrive%\\Users\\*"], false,
+     ("用户配置文件的根目录。整体删除会导致账户损坏，请只清理其中具体的子文件夹。",
+      "Root of user profiles. Deleting it as a whole corrupts the account; clean specific subfolders instead."), None),
 ];
 
-const HEURISTICS: &[(&str, &str, u8, &str, Option<&str>)] = &[
-    ("default", "未识别", 2,
-     "没有规则能识别这个位置，可能是软件数据或个人文件。为了安全，按“谨慎”处理。", None),
-    ("drive-root", "磁盘根目录", 3, "不能删除整个磁盘分区。", Some("请展开后选择具体的文件夹。")),
-    ("ext-temp", "临时/日志/备份文件", 1, "从扩展名看是临时文件、日志或备份文件，通常可以删除。", None),
-    ("reparse", "链接", 2,
-     "这是一个链接（联接点或符号链接），指向其他位置。扫描时没有进入，也没有统计它指向的内容。删除只会删除链接本身。", None),
-    ("legacy-junction", "系统兼容链接", 3,
-     "Windows 为兼容旧程序创建的隐藏链接，删除可能导致旧程序出错。", None),
-    ("virtual", "扫描结果", 3, "", None),
+const HEURISTICS: &[(&str, Bi, u8, Bi, Option<Bi>)] = &[
+    ("default", ("未识别", "Unrecognized"), 2,
+     ("没有规则能识别这个位置，可能是软件数据或个人文件。为了安全，按“谨慎”处理。",
+      "No rule recognizes this location. It may be app data or personal files, so it is treated as “Caution” to be safe."), None),
+    ("drive-root", ("磁盘根目录", "Drive root"), 3, ("不能删除整个磁盘分区。", "A whole drive cannot be deleted."),
+     Some(("请展开后选择具体的文件夹。", "Expand it and pick specific folders."))),
+    ("ext-temp", ("临时/日志/备份文件", "Temp / log / backup file"), 1,
+     ("从扩展名看是临时文件、日志或备份文件，通常可以删除。",
+      "Judging by its extension, this is a temp, log or backup file and can usually be deleted."), None),
+    ("reparse", ("链接", "Link"), 2,
+     ("这是一个链接（联接点或符号链接），指向其他位置。扫描时没有进入，也没有统计它指向的内容。删除只会删除链接本身。",
+      "This is a link (junction or symbolic link) to another location. The scan did not follow it or count its target. Deleting removes only the link itself."), None),
+    ("legacy-junction", ("系统兼容链接", "Compatibility link"), 3,
+     ("Windows 为兼容旧程序创建的隐藏链接，删除可能导致旧程序出错。",
+      "A hidden link Windows creates for older programs. Deleting it may break them."), None),
+    ("virtual", ("扫描结果", "Scan results"), 3, ("", ""), None),
 ];
+
+fn bi(t: Bi) -> Text {
+    Text::new(t.0, t.1)
+}
 
 const TEMP_EXTS: &[&str] = &["tmp", "temp", "bak", "old", "dmp", "log", "etl", "chk", "~tmp"];
 
@@ -218,12 +253,12 @@ impl Rules {
         for (id, name, level, note, alt) in HEURISTICS {
             entries.push(Entry {
                 id: id.to_string(),
-                name: name.to_string(),
-                category: "内置判断".into(),
+                name: bi(*name),
+                category: Text::new("内置判断", "Built-in check"),
                 level: *level,
                 mode: Mode::Whole,
-                note: note.to_string(),
-                alt: alt.map(String::from),
+                note: bi(*note),
+                alt: alt.map(bi),
                 origin: Origin::Heuristic,
                 inherit: false,
                 quick: false,
@@ -248,12 +283,12 @@ impl Rules {
             let paths: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
             add(&mut entries, &mut patterns, Entry {
                 id: id.to_string(),
-                name: name.to_string(),
-                category: "系统保护".into(),
+                name: bi(*name),
+                category: Text::new("系统保护", "System protection"),
                 level: 3,
                 mode: Mode::Whole,
-                note: note.to_string(),
-                alt: alt.map(String::from),
+                note: bi(*note),
+                alt: alt.map(bi),
                 origin: Origin::Protected,
                 inherit: *inherit,
                 quick: false,
@@ -264,17 +299,21 @@ impl Rules {
 
         let json: Vec<JsonRule> =
             serde_json::from_str(include_str!("../rules/builtin.json")).expect("builtin.json 格式错误");
+        let en: JsonEn =
+            serde_json::from_str(include_str!("../rules/builtin.en.json")).expect("builtin.en.json 格式错误");
         for r in json {
             let allow_global = matches!(r.id.as_str(), "downloads" | "personal" | "onedrive");
+            let e = en.rules.get(&r.id);
+            let cat_en = en.categories.get(&r.category).cloned().unwrap_or_default();
             add(&mut entries, &mut patterns, Entry {
                 quick: r.quick.unwrap_or(r.level <= 1),
-                id: r.id,
-                name: r.name,
-                category: r.category,
+                name: Text { zh: r.name, en: e.map(|x| x.name.clone()).unwrap_or_default() },
+                category: Text { zh: r.category, en: cat_en },
                 level: r.level.min(3),
                 mode: r.mode,
-                note: r.note,
-                alt: r.alt,
+                note: Text { zh: r.note, en: e.map(|x| x.note.clone()).unwrap_or_default() },
+                alt: r.alt.map(|zh| Text { zh, en: e.and_then(|x| x.alt.clone()).unwrap_or_default() }),
+                id: r.id,
                 origin: Origin::Rule,
                 inherit: false,
                 allow_global,
@@ -420,6 +459,22 @@ mod tests {
         assert!(is_temp_ext("setup.log"));
         assert!(!is_temp_ext(".log"));
         assert!(!is_temp_ext("report.docx"));
+    }
+
+    /// 每条规则都要有英文名称、说明、分类（有替代做法的也要有英文）
+    #[test]
+    fn english_complete() {
+        let r = Rules::load();
+        for e in &r.entries {
+            assert!(!e.name.en.is_empty(), "{} 缺少英文名称", e.id);
+            assert!(!e.category.en.is_empty(), "{} 缺少英文分类", e.id);
+            if !e.note.zh.is_empty() {
+                assert!(!e.note.en.is_empty(), "{} 缺少英文说明", e.id);
+            }
+            if let Some(a) = &e.alt {
+                assert!(!a.en.is_empty(), "{} 缺少英文替代做法", e.id);
+            }
+        }
     }
 
     #[test]

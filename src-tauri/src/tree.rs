@@ -377,9 +377,19 @@ impl Tree {
     pub fn view(&self, rules: &Rules, id: u32) -> NodeView {
         let n = &self.nodes[id as usize];
         let live_children = n.children.len() as u32;
+        // 汇总节点的名称按当前语言生成
+        let name = if n.flags & F_VIRTUAL != 0 {
+            let d = self.drive.trim_end_matches('\\');
+            match self.mode {
+                ScanMode::Quick => format!("{} {d}", crate::i18n::tr("快速扫描", "Quick scan")),
+                ScanMode::Full => crate::i18n::tr("扫描结果", "Scan results"),
+            }
+        } else {
+            n.name.to_string()
+        };
         NodeView {
             id,
-            name: n.name.to_string(),
+            name,
             dir: n.is_dir(),
             size: n.size,
             files: n.files,
@@ -390,7 +400,7 @@ impl Tree {
             children: live_children,
             flags: n.flags,
             sub: n.sub,
-            rule: if n.rule == H_DEFAULT { None } else { Some(rules.entry(n.rule).name.clone()) },
+            rule: if n.rule == H_DEFAULT { None } else { Some(rules.entry(n.rule).name.get().to_string()) },
         }
     }
 

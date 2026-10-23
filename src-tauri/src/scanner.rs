@@ -118,7 +118,7 @@ pub fn scan_full(root: &Path, rules: &Rules, ctx: &Ctx) -> Tree {
 /// 快速扫描某个磁盘：只扫规则库里登记的可清理位置
 pub fn scan_quick(rules: &Rules, drive: &str, ctx: &Ctx) -> Tree {
     if let Some(mut cur) = ctx.progress.current.try_lock() {
-        *cur = format!("正在 {drive} 中查找可清理的位置…");
+        *cur = if crate::i18n::is_en() { format!("Looking for cleanable locations on {drive}…") } else { format!("正在 {drive} 中查找可清理的位置…") };
     }
     let targets = rules.quick_targets(drive);
     enum Got {
