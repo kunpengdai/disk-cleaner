@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>磁盘清理</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">磁盘清理</div>
+    <div id="drives" class="drives"></div>
+    <div class="actions">
+      <button id="btn-quick" class="primary">快速扫描</button>
+      <button id="btn-full">全盘扫描</button>
+      <button id="btn-cancel" class="hidden">取消</button>
+    </div>
+    <div id="admin" class="admin"></div>
+  </header>
+
+  <div id="progress" class="progress hidden">
+    <div class="progress-bar"><div class="progress-fill"></div></div>
+    <div id="progress-text" class="progress-text"></div>
+  </div>
+
+  <main class="main">
+    <section class="tree-pane">
+      <div class="tree-head">
+        <div class="c-name" data-sort="name">名称</div>
+        <div class="c-size" data-sort="size">大小</div>
+        <div class="c-bar">占上级</div>
+        <div class="c-files" data-sort="files">文件数</div>
+        <div class="c-risk">风险</div>
+        <div class="c-mtime" data-sort="mtime">修改时间</div>
+      </div>
+      <div id="tree" class="tree"><div id="tree-inner" class="tree-inner"></div></div>
+      <div id="empty" class="empty">
+        <h2>选择一个磁盘，开始扫描</h2>
+        <p><b>快速扫描</b>：只检查已知的缓存、临时文件等位置，几秒钟就能完成。</p>
+        <p><b>全盘扫描</b>：统计整个磁盘每个文件夹的大小，可能需要几分钟。</p>
+        <div class="legend">
+          <span class="badge l0">安全</span> 可直接清理
+          <span class="badge l1">需确认</span> 确认一次
+          <span class="badge l2">谨慎</span> 多重确认，只进回收站
+          <span class="badge l3">受保护</span> 不能删除
+        </div>
+      </div>
+    </section>
+
+    <aside class="side">
+      <div class="tabs">
+        <button data-tab="detail" class="tab active">详情</button>
+        <button data-tab="hits" class="tab">可清理汇总</button>
+      </div>
+      <div id="tab-detail" class="tab-body"><p class="muted">点击左侧的一行查看详情。</p></div>
+      <div id="tab-hits" class="tab-body hidden"></div>
+    </aside>
+  </main>
+
+  <footer class="basket">
+    <div id="basket-text" class="muted">勾选左侧的项目加入待删除清单</div>
+    <div class="basket-actions">
+      <button id="btn-log" class="link">删除记录</button>
+      <button id="btn-clear" class="hidden">清空清单</button>
+      <button id="btn-delete" class="danger" disabled>删除所选…</button>
+    </div>
+  </footer>
+
+  <div id="modal" class="modal hidden"><div class="dialog" id="dialog"></div></div>
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
